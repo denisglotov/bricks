@@ -3,9 +3,10 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <numeric>
+#include <queue>
 #include <unordered_map>
 #include <unordered_set>
-#include <queue>
 #include <vector>
 
 
@@ -35,11 +36,26 @@ string decode(CellId cell) {
     return string(1, (cell >> 24) + 'A') + to_string(cell & 0xFFFFFF);
 }
 
+struct CellData {
+    int ind;
+    int value;
+    int epoch;
+    vector<int> args;
+
+    CellData() : ind(0), value(0), epoch(0) {}
+
+    int eval() {
+        int result = accumulate(args.begin(), args.end(), 0);
+        args.clear();
+        return result;
+    }
+};
+
 
 int main(int argc, char *argv[]) {
-    map<CellId, pair<int, int>> values;
+    unordered_map<CellId, CellData> values;
     unordered_map<CellId, unordered_set<CellId>> deps;
-    queue<CellId> que;
+
     ifstream input(argc > 1? argv[1] : "input.txt");
     string str;
     while (getline(input, str)) {
@@ -47,13 +63,16 @@ int main(int argc, char *argv[]) {
         bool ok = parse(str, left, right);
         if (!ok) continue;
         CellId lval = encode(str, left);
+        if (values.count(lval)) {
+            cerr << "Warning: " << decode(lval).c_str() << " is redefined.\n";
+        }
 
         ok = parse(str, left, right);
         assert(ok);
         if (isCell(str, left)) {
-            int cnt = 0;
+            int ind = 0;
             do {
-                ++cnt;
+                ++ind;
                 CellId rval = encode(str, left);
                 if (deps[lval].count(rval)) {
                     cerr << "Warning: " << decode(lval).c_str()
@@ -62,19 +81,26 @@ int main(int argc, char *argv[]) {
                 }
                 deps[rval].insert(lval);
             } while (parse(str, left, right));
-            values[lval] = {cnt, 0};
+            values[lval].ind = ind;
         } else {
-            values[lval] = {0, atoi(str.c_str() + left)};
-            que.push(lval);
+            values[lval].value = atoi(str.c_str() + left);
         }
     }
+
+    // Evaluate cells by sorting them.
+    queue<CellId> que;
+    for (auto &data: values) if (data.second.ind == 0) que.push(data.first);
 
     while (!que.empty()) {
         CellId cell = que.front();
         que.pop();
         for (CellId d: deps[cell]) {
-            if (--values[d].first == 0) que.push(d);
-            values[d].second += values[cell].second;
+            CellData &data = values[d];
+            data.args.push_back(values[cell].value);
+            if (--data.ind == 0) {
+                data.value = data.eval();
+                que.push(d);
+            }
         }
         deps.erase(cell);
     }
@@ -84,9 +110,8 @@ int main(int argc, char *argv[]) {
         cerr << endl;
     }
 
-    for (auto &val: values) {
-        if (val.second.first == 0) cout << decode(val.first).c_str() << " = " << val.second.second << "\n";
-        //else cout << decode(val.first).c_str() << " =: " << val.second.first << "\n";
+    for (auto &val: map<CellId, CellData>(values.begin(), values.end())) {
+        if (val.second.ind == 0) cout << decode(val.first).c_str() << " = " << val.second.value << "\n";
     }
     // for (auto &dep: deps) {
     //     cout << decode(dep.first).c_str() << ": ";
@@ -97,5 +122,5 @@ int main(int argc, char *argv[]) {
 
 
 // Local Variables:
-// compile-command: "g++ -x c++ -std=gnu++17 -O2 task.cxx && time ./a.out"
+// compile-command: "g++ -x c++ -std=gnu++17 -O2 -Wall -pedantic -pthread task.cxx && time ./a.out"
 // End:
