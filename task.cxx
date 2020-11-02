@@ -69,8 +69,9 @@ struct Context {
 
     void add_stat() {
         unique_lock<mutex> stat_mu;
-        ++stat_total_jobs;
         stat_job_ids.insert(this_thread::get_id());
+        ++stat_total_jobs;
+        //if (stat_total_jobs % 1000 == 0) cerr << stat_total_jobs << "/" << stat_job_ids.size() << " ";
     }
 };
 
@@ -81,17 +82,17 @@ struct CellData {
     int value;
     int epoch;
     vector<int> args;
-    int remote_result;
+    future<int> remote_result;
 
     CellData() : ind(0), value(0), epoch(0) {}
-
-    void eval(vector<int> local_args, CellId id, Context *ctx) {
-        remote_result = accumulate(local_args.begin(), local_args.end(), 0);
-        ctx->add_stat();
-        ctx->ready_cells.enqueue(id);
-    }
 };
 
+int eval(vector<int> local_args, CellId id, Context *ctx) {
+    int res = accumulate(local_args.begin(), local_args.end(), 0);
+    ctx->add_stat();
+    ctx->ready_cells.enqueue(id);
+    return res;
+}
 
 
 int main(int argc, char *argv[]) {
@@ -145,7 +146,7 @@ int main(int argc, char *argv[]) {
                 data.args.push_back(values[cell].value);
                 if (--data.ind == 0) {
                     ++jobs;
-                    (void)async(launch::async, &CellData::eval, &data, data.args, dep, &ctx);
+                    data.remote_result = async(launch::async, &eval, data.args, dep, &ctx);
                 }
             }
             deps.erase(cell);
@@ -155,7 +156,7 @@ int main(int argc, char *argv[]) {
             --jobs;
             CellData &data = values[cell];
             // TODO: if (data.epoch)
-            data.value = data.remote_result;
+            data.value = data.remote_result.get();
             que.push(cell);
         }
     };
@@ -167,7 +168,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Print results.
-    for (auto &val: map<CellId, CellData>(values.begin(), values.end())) {
+    for (auto &val: values/*map<CellId, CellData>(values.begin(), values.end())*/) {
         if (val.second.ind == 0) cout << decode(val.first).c_str() << " = " << val.second.value << "\n";
     }
     cerr << "Total jobs executed: " << ctx.stat_total_jobs
