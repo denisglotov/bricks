@@ -2,7 +2,6 @@
 #include <cctype>
 #include <fstream>
 #include <future>
-#include <functional>  // ?
 #include <iostream>
 #include <map>
 #include <numeric>
@@ -75,7 +74,6 @@ class ThreadPool {
 
 public:
     ThreadPool(size_t threads) : stop(false) {
-        cerr << "Creating a thread pool with threads: " << threads << "\n";
         for (size_t i = 0; i < threads; ++i) {
             workers.emplace_back(thread(&ThreadPool::worker, this));
         }
@@ -86,7 +84,7 @@ public:
         while (true) {
             {
                 unique_lock<mutex> lock(mu);
-                cv.wait(lock, [this]{ return stop || !tasks.empty(); });
+                cv.wait(lock, [this] { return stop || !tasks.empty(); });
                 if (stop) return;
                 task = move(tasks.front());
                 tasks.pop();
@@ -95,9 +93,7 @@ public:
         }
     }
     
-    template<class F, class... Args>
-    void enqueue(F&& f, Args&&... args) {
-        auto task = bind(forward<F>(f), forward<Args>(args)...);
+    void enqueue(function<void()>&& task) {
         {
             unique_lock<mutex> lock(mu);
             tasks.emplace(task);
@@ -126,10 +122,9 @@ struct Context {
     mutex stat_mu;
 
     void add_stat() {
-        unique_lock<mutex> stat_mu;
+        unique_lock<mutex> lock(stat_mu);
         stat_job_ids.insert(this_thread::get_id());
         ++stat_total_jobs;
-        //if (stat_total_jobs % 1000 == 0) cerr << stat_total_jobs << "/" << stat_job_ids.size() << " ";
     }
 };
 
@@ -204,7 +199,7 @@ int main(int argc, char *argv[]) {
                 data.args.push_back(values[cell].value);
                 if (--data.ind == 0) {
                     ++jobs;
-                    pool.enqueue(&CellData::eval, &data, data.args, dep, &ctx);
+                    pool.enqueue([dep, &data, &ctx] { data.eval(data.args, dep, &ctx); });
                 }
             }
             deps.erase(cell);
@@ -234,15 +229,8 @@ int main(int argc, char *argv[]) {
          << "Threads used: ";
     for (auto t: ctx.stat_job_ids) cerr << t << " ";
     cerr << "\n";
-
-    // for (auto &dep: deps) {
-    //     cout << decode(dep.first).c_str() << ": ";
-    //     for (auto cell: dep.second) cout << decode(cell).c_str() << " ";
-    //     cout << "\n";
-    // }
 }
 
-
 // Local Variables:
-// compile-command: "g++ -x c++ -std=gnu++17 -O2 -Wall -pedantic -pthread task.cxx && time ./a.out"
+// compile-command: "g++ -x c++ -std=gnu++17 -O2 -Wall -pedantic -pthread task.cxx"
 // End:
