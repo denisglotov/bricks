@@ -2,6 +2,7 @@
 #include <cctype>
 #include <fstream>
 #include <future>
+#include <functional>  // ?
 #include <iostream>
 #include <map>
 #include <numeric>
@@ -37,6 +38,8 @@ string decode(CellId cell) {
     return string(1, (cell >> 24) + 'A') + to_string(cell & 0xFFFFFF);
 }
 
+
+// Simple producer-consumer queue implementation.
 template <typename T>
 class ProducerConsumerQueue {
     deque<T> que;
@@ -45,8 +48,10 @@ class ProducerConsumerQueue {
 
 public:
     void enqueue(T id) {
-        unique_lock<mutex> lock(mu);
-        que.push_back(id);
+        {
+            unique_lock<mutex> lock(mu);
+            que.push_back(id);
+        }
         cv.notify_one();
     }
 
@@ -56,6 +61,59 @@ public:
         deque<T> res;
         res.swap(que);
         return res;
+    }
+};
+
+
+// Simple thread pool.
+class ThreadPool {
+    vector<thread> workers;
+    queue<function<void()>> tasks;
+    bool stop;
+    mutex mu;
+    condition_variable cv;
+
+public:
+    ThreadPool(size_t threads) : stop(false) {
+        cerr << "Creating a thread pool with threads: " << threads << "\n";
+        for (size_t i = 0; i < threads; ++i) {
+            workers.emplace_back(thread(&ThreadPool::worker, this));
+        }
+    }
+
+    void worker(void) {
+        function<void()> task;
+        while (true) {
+            {
+                unique_lock<mutex> lock(mu);
+                cv.wait(lock, [this]{ return stop || !tasks.empty(); });
+                if (stop) return;
+                task = move(tasks.front());
+                tasks.pop();
+            }
+            task();
+        }
+    }
+    
+    template<class F, class... Args>
+    void enqueue(F&& f, Args&&... args) {
+        auto task = bind(forward<F>(f), forward<Args>(args)...);
+        {
+            unique_lock<mutex> lock(mu);
+            tasks.emplace(task);
+        }
+        cv.notify_one();
+    }
+
+    ~ThreadPool() {
+        {
+            unique_lock<mutex> lock(mu);
+            stop = true;
+        }
+        cv.notify_all();
+        for(thread &worker: workers) {
+            worker.join();
+        }
     }
 };
 
@@ -82,17 +140,16 @@ struct CellData {
     int value;
     int epoch;
     vector<int> args;
-    future<int> remote_result;
+    int remote_result;
 
     CellData() : ind(0), value(0), epoch(0) {}
-};
 
-int eval(vector<int> local_args, CellId id, Context *ctx) {
-    int res = accumulate(local_args.begin(), local_args.end(), 0);
-    ctx->add_stat();
-    ctx->ready_cells.enqueue(id);
-    return res;
-}
+    void eval(vector<int> local_args, CellId id, Context *ctx) {
+        remote_result = accumulate(local_args.begin(), local_args.end(), 0);
+        ctx->add_stat();
+        ctx->ready_cells.enqueue(id);
+    }
+};
 
 
 int main(int argc, char *argv[]) {
@@ -132,6 +189,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Evaluate cells by sorting them.
+    ThreadPool pool(thread::hardware_concurrency());  // -1
     int jobs = 0;
     Context ctx;
     queue<CellId> que;
@@ -146,7 +204,7 @@ int main(int argc, char *argv[]) {
                 data.args.push_back(values[cell].value);
                 if (--data.ind == 0) {
                     ++jobs;
-                    data.remote_result = async(launch::async, &eval, data.args, dep, &ctx);
+                    pool.enqueue(&CellData::eval, &data, data.args, dep, &ctx);
                 }
             }
             deps.erase(cell);
@@ -156,7 +214,7 @@ int main(int argc, char *argv[]) {
             --jobs;
             CellData &data = values[cell];
             // TODO: if (data.epoch)
-            data.value = data.remote_result.get();
+            data.value = data.remote_result;
             que.push(cell);
         }
     };
@@ -168,7 +226,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Print results.
-    for (auto &val: values/*map<CellId, CellData>(values.begin(), values.end())*/) {
+    for (auto &val: map<CellId, CellData>(values.begin(), values.end())) {
         if (val.second.ind == 0) cout << decode(val.first).c_str() << " = " << val.second.value << "\n";
     }
     cerr << "Total jobs executed: " << ctx.stat_total_jobs
