@@ -132,11 +132,11 @@ struct WorkersContext {
     unordered_set<thread::id> stat_job_ids;
     mutex stat_mu;
 
-    void eval(const vector<int> &local_args, CellId id, CellData &data) {
-        //this_thread::sleep_for(10us);
+    void eval(const vector<int> &local_args, CellId cell, CellData &data) {
+        if (rand() % 10 == 0) this_thread::sleep_for(500us);  // simulate random delay
         data.remote_result = accumulate(local_args.begin(), local_args.end(), 0);
         add_stat();
-        ready_cells.enqueue(id);
+        ready_cells.enqueue(cell);
     }
 
     void add_stat() {
@@ -160,7 +160,7 @@ int main(int argc, char *argv[]) {
         if (!ok) continue;
         CellId left_cell = encode(str, left);
         if (page.count(left_cell)) {
-            cerr << "Warning: " << decode(left_cell).c_str() << " is redefined.\n";
+            cerr << "Warning: " << decode(left_cell) << " is redefined.\n";
         }
 
         ok = parse(str, left, right);
@@ -171,9 +171,9 @@ int main(int argc, char *argv[]) {
                 ++indir;
                 CellId right_cell = encode(str, left);
                 if (deps[left_cell].count(right_cell)) {
-                    cerr << "Warning: " << decode(left_cell).c_str()
-                         << " already depends on " << decode(right_cell).c_str()
-                         << ", parsing '" << str.c_str() << "', ignored." << endl;
+                    cerr << "Warning: " << decode(left_cell)
+                         << " already depends on " << decode(right_cell)
+                         << ", parsing '" << str << "', ignored." << endl;
                 }
                 deps[right_cell].insert(left_cell);
             } while (parse(str, left, right));
@@ -192,17 +192,18 @@ int main(int argc, char *argv[]) {
 
     while (true) {
         while (!que.empty()) {
-            CellId cell = que.front();
+            CellId cur_cell = que.front();
             que.pop();
-            for (CellId dcell: deps[cell]) {
-                CellData &data = page[dcell];
-                data.args.push_back(page[cell].value);
+            for (CellId dep_cell: deps[cur_cell]) {
+                CellData &data = page[dep_cell];
+                data.args.push_back(page[cur_cell].value);
                 if (--data.indir == 0) {
                     ++running_jobs;
-                    pool.enqueue([dcell, args = move(data.args), &data, &ctx] { ctx.eval(args, dcell, data); });
+                    pool.enqueue([dep_cell, args = move(data.args), &data, &ctx]
+                                 { ctx.eval(args, dep_cell, data); });
                 }
             }
-            deps.erase(cell);
+            deps.erase(cur_cell);
         }
         if (!running_jobs) break;
         for (CellId cell: ctx.ready_cells.dequeue()) {
@@ -215,16 +216,16 @@ int main(int argc, char *argv[]) {
 
     if (deps.size()) {
         cerr << "Warning: the following cells are left unresolved: ";
-        for (auto &d: deps) cerr << decode(d.first).c_str() << " ";
+        for (auto &d: deps) cerr << decode(d.first) << " ";
         cerr << endl;
     }
 
     // Print results.
     for (auto &val: map<CellId, CellData>(page.begin(), page.end())) {
-        if (val.second.indir == 0) cout << decode(val.first).c_str() << " = " << val.second.value << "\n";
+        if (val.second.indir == 0) cout << decode(val.first) << " = " << val.second.value << "\n";
     }
-    cerr << "Total jobs executed: " << ctx.stat_total_jobs
-         << ", main thread id: " << this_thread::get_id() << ".\n"
+    cerr << "Total jobs executed: " << ctx.stat_total_jobs << ", "
+         << "main thread id: " << this_thread::get_id() << ".\n"
          << "Threads used: ";
     for (auto t: ctx.stat_job_ids) cerr << t << " ";
     cerr << "\n";
