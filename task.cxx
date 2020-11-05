@@ -133,6 +133,7 @@ struct WorkersContext {
     mutex stat_mu;
 
     void eval(const vector<int> &local_args, CellId id, CellData &data) {
+        //this_thread::sleep_for(10us);
         data.remote_result = accumulate(local_args.begin(), local_args.end(), 0);
         add_stat();
         ready_cells.enqueue(id);
@@ -148,7 +149,7 @@ struct WorkersContext {
 
 int main(int argc, char *argv[]) {
     unordered_map<CellId, CellData> page;               // all cell data on this page
-    unordered_map<CellId, unordered_set<CellId>> deps;  // set of cells that depends on this one
+    unordered_map<CellId, unordered_set<CellId>> deps;  // set of cells that depend on this
 
     // Parse input file.
     ifstream input(argc > 1? argv[1] : "input.txt");
@@ -183,9 +184,9 @@ int main(int argc, char *argv[]) {
     }
 
     // Evaluate cells by sorting them.
-    ThreadPool pool(thread::hardware_concurrency());  // -1
-    int running_jobs = 0;
     WorkersContext ctx;
+    ThreadPool pool(thread::hardware_concurrency());
+    int running_jobs = 0;
     queue<CellId> que;
     for (auto &data: page) if (data.second.indir == 0) que.push(data.first);
 
@@ -207,7 +208,6 @@ int main(int argc, char *argv[]) {
         for (CellId cell: ctx.ready_cells.dequeue()) {
             --running_jobs;
             CellData &data = page[cell];
-            // TODO: if (data.epoch)
             data.value = data.remote_result;
             que.push(cell);
         }
@@ -224,7 +224,7 @@ int main(int argc, char *argv[]) {
         if (val.second.indir == 0) cout << decode(val.first).c_str() << " = " << val.second.value << "\n";
     }
     cerr << "Total jobs executed: " << ctx.stat_total_jobs
-         << ", current thread id: " << this_thread::get_id() << ".\n"
+         << ", main thread id: " << this_thread::get_id() << ".\n"
          << "Threads used: ";
     for (auto t: ctx.stat_job_ids) cerr << t << " ";
     cerr << "\n";
