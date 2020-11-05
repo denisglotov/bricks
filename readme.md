@@ -7,7 +7,7 @@ Build with `g++ -x c++ -std=gnu++17 -O2 -Wall -pedantic -pthread task.cxx`.
 Restrictions
 ------------
 
-1. Cell IDs must be: [A-Z][0-9]+, the number [0..15777215].
+1. Cell IDs must be: [A-Z][0-9]+, the number in range [0..15777215].
 
 2. Every non-empty line is either:
    * `<cellId> = <number>` or
@@ -31,5 +31,3 @@ TODO
 
 1. Check with thread sanitizer.
 2. Simulate time delays.
-3. Check function<void()>&&.
-4. data.args.swap()
