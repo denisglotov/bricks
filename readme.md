@@ -21,7 +21,8 @@ Restrictions
 
 2. Every non-empty line is either:
    * `<cellId> = <number>` or
-   * `<cellId> = <cellId> [+ <cellId>[ + <cellId>[ ... ]]]`.
+   * `<cellId> = [±] <cellId> [± <cellId>[ ± <cellId>[ ... ]]]`, here `±` is
+     either `+` or `-` sign.
 
 3. No error handling or exception handling.
 
