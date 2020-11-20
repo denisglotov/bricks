@@ -15,9 +15,12 @@ using namespace std;
 using CellId = uint32_t;
 
 
-bool parse(const string &str, size_t &left, size_t &right) {
+bool parse(const string &str, size_t &left, size_t &right, char &last_punct) {
     left = right;
-    while (left != str.size() && !isalnum(str[left])) ++left;
+    while (left != str.size() && !isalnum(str[left])) {
+        if (ispunct(str[left])) last_punct = str[left];
+        ++left;
+    }
     right = left;
     while (right != str.size() && isalnum(str[right])) ++right;
     return right > left;
@@ -113,12 +116,18 @@ public:
 };
 
 
+// Formula of every cell. In this implementation it is just a linear
+// combination of dependant cells.
+using Formula = unordered_map<CellId, int>;  // cellId -> coefficient
+using FormulaData = vector<pair<int, int>>;  // cell value, coefficient
+
+
 // Data for every cell on a page.
 struct CellData {
     int value;          // current value
     int indir;          // indirection - on how many cells does this one depend
     int epoch;          // epoch of this cell, updated when user rewrites it
-    vector<int> args;   // arguments needed to calculate this cell
+    FormulaData args;   // arguments needed to calculate this cell
     int remote_result;  // result of calculation by worker thread
 
     CellData() : value(0), indir(0), epoch(0) {}
@@ -132,9 +141,10 @@ struct WorkersContext {
     unordered_set<thread::id> stat_job_ids;
     mutex stat_mu;
 
-    void eval(const vector<int> &local_args, CellId cell, CellData &data) {
+    void eval(const FormulaData &local_args, CellId cell, CellData &data) {
         if (rand() % 10 == 0) this_thread::sleep_for(500us);  // simulate random delay
-        data.remote_result = accumulate(local_args.begin(), local_args.end(), 0);
+        data.remote_result = accumulate(local_args.begin(), local_args.end(), 0,
+                                        [] (int acc, auto &pair) { return acc + pair.first * pair.second; } );
         add_stat();
         ready_cells.enqueue(cell);
     }
@@ -150,20 +160,22 @@ struct WorkersContext {
 int main(int argc, char *argv[]) {
     unordered_map<CellId, CellData> page;               // all cell data on this page
     unordered_map<CellId, unordered_set<CellId>> deps;  // set of cells that depend on this
+    unordered_map<CellId, Formula> formulae;            // set of formulae for each cell
 
     // Parse input file.
     ifstream input(argc > 1? argv[1] : "input.txt");
     string str;
+    char last_punct;
     while (getline(input, str)) {
         size_t left = 0, right = 0;
-        bool ok = parse(str, left, right);
+        bool ok = parse(str, left, right, last_punct);
         if (!ok) continue;
         CellId left_cell = encode(str, left);
         if (page.count(left_cell)) {
             cerr << "Warning: " << decode(left_cell) << " is redefined.\n";
         }
 
-        ok = parse(str, left, right);
+        ok = parse(str, left, right, last_punct);
         assert(ok);
         if (isCell(str, left)) {
             int indir = 0;
@@ -176,7 +188,8 @@ int main(int argc, char *argv[]) {
                          << ", parsing '" << str << "', ignored." << endl;
                 }
                 deps[right_cell].insert(left_cell);
-            } while (parse(str, left, right));
+                formulae[left_cell][right_cell] = (last_punct == '-')? -1 : 1;
+            } while (parse(str, left, right, last_punct));
             page[left_cell].indir = indir;
         } else {
             page[left_cell].value = atoi(str.c_str() + left);
@@ -196,7 +209,7 @@ int main(int argc, char *argv[]) {
             que.pop();
             for (CellId dep_cell: deps[cur_cell]) {
                 CellData &data = page[dep_cell];
-                data.args.push_back(page[cur_cell].value);
+                data.args.emplace_back(page[cur_cell].value, formulae[dep_cell][cur_cell]);
                 if (--data.indir == 0) {
                     ++running_jobs;
                     pool.enqueue([dep_cell, args = move(data.args), &data, &ctx]
